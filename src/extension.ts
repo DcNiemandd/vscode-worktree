@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { loadConfig } from "./config";
+import { q, sh } from "./exec";
 import {
   closeHerdrByLabel,
   createHerdr,
@@ -19,6 +20,22 @@ import {
 
 function firstFolder(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+}
+
+// Ask the built-in Git extension to open a path as a repository. Worktrees added
+// at runtime otherwise aren't picked up by Source Control until an IDE restart.
+async function openGitRepo(fsPath: string): Promise<void> {
+  try {
+    await vscode.commands.executeCommand("git.openRepository", fsPath);
+  } catch {
+    /* git extension missing, or not a repo */
+  }
+}
+
+async function registerRepos(): Promise<void> {
+  for (const f of vscode.workspace.workspaceFolders ?? []) {
+    await openGitRepo(f.uri.fsPath);
+  }
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -49,10 +66,18 @@ export function activate(context: vscode.ExtensionContext): void {
       "wtHelper.disconnect",
       (item?: WorktreeItem) => disconnectCmd(provider, item),
     ),
+    vscode.commands.registerCommand(
+      "wtHelper.openHerdr",
+      (item?: WorktreeItem) => openHerdrCmd(item),
+    ),
     vscode.commands.registerCommand("wtHelper.remove", (item?: WorktreeItem) =>
       removeWorktreeCmd(provider, channel, item),
     ),
   );
+
+  // Nudge the built-in Git extension to register every worktree root as a
+  // repository, so Source Control reacts without needing an IDE restart.
+  void registerRepos();
 }
 
 export function deactivate(): void {
@@ -148,6 +173,9 @@ async function doConnect(wt: Worktree, root: string): Promise<void> {
       }
     }
   }
+  // Register with Source Control before the (possibly host-restarting) add.
+  await openGitRepo(wt.path);
+
   // Add the workspace root LAST (may restart the extension host).
   const folders = vscode.workspace.workspaceFolders ?? [];
   if (!folders.some((f) => f.uri.fsPath === wt.path)) {
@@ -257,6 +285,61 @@ async function disconnectCmd(
   vscode.window.showInformationMessage(
     `wt-helper: disconnected ${wt.branch || wt.path} (worktree kept)`,
   );
+}
+
+// Open (or focus) this worktree's herdr session in a new terminal pane.
+async function openHerdrCmd(item?: WorktreeItem): Promise<void> {
+  const root = firstFolder();
+  if (!root) {
+    return;
+  }
+  if (!(await herdrAvailable(root))) {
+    vscode.window.showErrorMessage(
+      "wt-helper: herdr is not installed / not on PATH.",
+    );
+    return;
+  }
+
+  let wt: Worktree | undefined = item?.wt;
+  if (!wt) {
+    const all = await listWorktrees(root);
+    const pick = await vscode.window.showQuickPick(
+      all.map((w) => ({
+        label: w.branch || w.path,
+        description: w.path,
+        wt: w,
+      })),
+      { placeHolder: "Open herdr for which worktree?" },
+    );
+    wt = pick?.wt;
+  }
+  if (!wt) {
+    return;
+  }
+
+  const label = wt.branch || path.basename(wt.path);
+
+  // Ensure a session exists for this worktree, then focus it server-side so the
+  // attaching client opens on it.
+  const existing = (await listHerdr(root)).find((s) => s.label === label);
+  if (existing) {
+    await sh(`herdr workspace focus ${q(existing.id)}`, root);
+  } else {
+    try {
+      await createHerdr(wt.path, label, root);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Open a dedicated terminal pane (editor area) and attach to herdr.
+  const term = vscode.window.createTerminal({
+    name: `herdr: ${label}`,
+    cwd: wt.path,
+    location: vscode.TerminalLocation.Editor,
+  });
+  term.show();
+  term.sendText("herdr");
 }
 
 async function removeWorktreeCmd(

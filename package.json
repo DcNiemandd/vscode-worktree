@@ -1,6 +1,6 @@
 {
   "name": "wt-helper",
-  "displayName": "wt-helper — Git Worktrees + herdr",
+  "displayName": "herdr worktrees",
   "description": "Sidebar for git worktrees with optional herdr sessions: create / open / remove worktrees, add them as workspace roots, all without the terminal.",
   "version": "0.0.1",
   "publisher": "local",
@@ -25,7 +25,7 @@
       "activitybar": [
         {
           "id": "wtHelper",
-          "title": "Worktrees",
+          "title": "herdr worktrees",
           "icon": "resources/worktrees.svg"
         }
       ]
@@ -50,6 +50,12 @@
         "title": "Refresh",
         "category": "wt-helper",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "wtHelper.openHerdr",
+        "title": "Open herdr Session (new pane)",
+        "category": "wt-helper",
+        "icon": "$(terminal)"
       },
       {
         "command": "wtHelper.connect",
@@ -90,14 +96,24 @@
       ],
       "view/item/context": [
         {
+          "command": "wtHelper.openHerdr",
+          "when": "view == wtHelperWorktrees && viewItem =~ /^worktree/",
+          "group": "inline@0"
+        },
+        {
+          "command": "wtHelper.openHerdr",
+          "when": "view == wtHelperWorktrees && viewItem =~ /^worktree/",
+          "group": "0_herdr"
+        },
+        {
           "command": "wtHelper.connect",
           "when": "view == wtHelperWorktrees && viewItem == worktreeDisconnected",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "wtHelper.disconnect",
           "when": "view == wtHelperWorktrees && viewItem == worktreeConnected",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "wtHelper.connect",

@@ -79,8 +79,13 @@ export class WorktreeProvider implements vscode.TreeDataProvider<WorktreeItem> {
         statuses.set(h.label, h.status);
       }
     }
-    return wts.map(
+    const items = wts.map(
       (w) => new WorktreeItem(w, statuses.get(w.branch), connected.has(w.path)),
     );
+    // Sort: main (root) → connected → disconnected, then alphabetically.
+    const rank = (i: WorktreeItem) => (i.wt.isMain ? 0 : i.connected ? 1 : 2);
+    const key = (i: WorktreeItem) => i.wt.branch || i.wt.path;
+    items.sort((a, b) => rank(a) - rank(b) || key(a).localeCompare(key(b)));
+    return items;
   }
 }
