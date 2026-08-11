@@ -52,8 +52,20 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "wtHelper.connect",
+        "title": "Connect Worktree",
+        "category": "wt-helper",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "wtHelper.disconnect",
+        "title": "Disconnect Worktree",
+        "category": "wt-helper",
+        "icon": "$(debug-disconnect)"
+      },
+      {
         "command": "wtHelper.remove",
-        "title": "Remove Worktree",
+        "title": "Remove Worktree (delete)",
         "category": "wt-helper",
         "icon": "$(trash)"
       },
@@ -78,9 +90,29 @@
       ],
       "view/item/context": [
         {
-          "command": "wtHelper.remove",
-          "when": "view == wtHelperWorktrees && viewItem == worktree",
+          "command": "wtHelper.connect",
+          "when": "view == wtHelperWorktrees && viewItem == worktreeDisconnected",
           "group": "inline"
+        },
+        {
+          "command": "wtHelper.disconnect",
+          "when": "view == wtHelperWorktrees && viewItem == worktreeConnected",
+          "group": "inline"
+        },
+        {
+          "command": "wtHelper.connect",
+          "when": "view == wtHelperWorktrees && viewItem == worktreeDisconnected",
+          "group": "1_state"
+        },
+        {
+          "command": "wtHelper.disconnect",
+          "when": "view == wtHelperWorktrees && viewItem == worktreeConnected",
+          "group": "1_state"
+        },
+        {
+          "command": "wtHelper.remove",
+          "when": "view == wtHelperWorktrees && viewItem =~ /^worktree(Connected|Disconnected)$/",
+          "group": "9_danger"
         }
       ]
     },

@@ -6,23 +6,42 @@ export class WorktreeItem extends vscode.TreeItem {
   constructor(
     public readonly wt: Worktree,
     status: string | undefined,
+    public readonly connected: boolean,
   ) {
     super(
       wt.isMain ? `★ ${wt.branch || "(main)"}` : wt.branch || wt.path,
       vscode.TreeItemCollapsibleState.None,
     );
-    this.description = status && status !== "none" ? status : undefined;
+
+    // contextValue drives which inline/menu actions show:
+    //   worktreeMain         → open only
+    //   worktreeConnected    → Disconnect (+ Remove)
+    //   worktreeDisconnected → Connect (+ Remove)
+    this.contextValue = wt.isMain
+      ? "worktreeMain"
+      : connected
+        ? "worktreeConnected"
+        : "worktreeDisconnected";
+
+    if (!connected && !wt.isMain) {
+      this.description = "disconnected";
+      this.iconPath = new vscode.ThemeIcon(
+        "circle-slash",
+        new vscode.ThemeColor("disabledForeground"),
+      );
+    } else {
+      this.description = status && status !== "none" ? status : undefined;
+      this.iconPath = new vscode.ThemeIcon(
+        status === "working"
+          ? "circle-filled"
+          : status === "idle"
+            ? "circle-outline"
+            : "git-branch",
+      );
+    }
+
     this.resourceUri = vscode.Uri.file(wt.path);
     this.tooltip = wt.path;
-    // Only non-main worktrees expose the inline Remove action.
-    this.contextValue = wt.isMain ? "worktreeMain" : "worktree";
-    this.iconPath = new vscode.ThemeIcon(
-      status === "working"
-        ? "circle-filled"
-        : status === "idle"
-          ? "circle-outline"
-          : "git-branch",
-    );
     this.command = {
       command: "wtHelper.open",
       title: "Reveal in Explorer",
@@ -51,12 +70,17 @@ export class WorktreeProvider implements vscode.TreeDataProvider<WorktreeItem> {
       return [];
     }
     const wts = await listWorktrees(root);
+    const connected = new Set(
+      (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+    );
     const statuses = new Map<string, string>();
     if (await herdrAvailable(root)) {
       for (const h of await listHerdr(root)) {
         statuses.set(h.label, h.status);
       }
     }
-    return wts.map((w) => new WorktreeItem(w, statuses.get(w.branch)));
+    return wts.map(
+      (w) => new WorktreeItem(w, statuses.get(w.branch), connected.has(w.path)),
+    );
   }
 }

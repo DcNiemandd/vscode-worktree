@@ -1,7 +1,12 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { loadConfig } from "./config";
-import { closeHerdrByLabel, createHerdr, herdrAvailable } from "./herdr";
+import {
+  closeHerdrByLabel,
+  createHerdr,
+  herdrAvailable,
+  listHerdr,
+} from "./herdr";
 import { WorktreeItem, WorktreeProvider } from "./tree";
 import {
   createWorktree,
@@ -36,6 +41,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("wtHelper.new", () =>
       newWorktree(provider, channel),
+    ),
+    vscode.commands.registerCommand("wtHelper.connect", (item?: WorktreeItem) =>
+      connectCmd(provider, item),
+    ),
+    vscode.commands.registerCommand(
+      "wtHelper.disconnect",
+      (item?: WorktreeItem) => disconnectCmd(provider, item),
     ),
     vscode.commands.registerCommand("wtHelper.remove", (item?: WorktreeItem) =>
       removeWorktreeCmd(provider, channel, item),
@@ -113,27 +125,138 @@ async function newWorktree(
     return;
   }
 
-  // herdr BEFORE touching workspace folders — adding a root can restart the
-  // extension host (single → multi-root), which would abort anything after it.
-  if (cfg.herdr && (await herdrAvailable(root))) {
-    try {
-      await createHerdr(newPath, branch, root);
-    } catch {
-      /* best-effort */
-    }
-  }
-
   provider.refresh();
   vscode.window.showInformationMessage(
     `wt-helper: worktree ready for ${branch}`,
   );
 
-  // Add as a workspace root LAST.
+  // Connect it: herdr session + workspace root. (doConnect adds the root last,
+  // because the single → multi-root transition can restart the extension host.)
+  await doConnect({ path: newPath, branch, isMain: false }, root);
+}
+
+// Attach an existing worktree to VS Code (+ herdr) without creating anything.
+async function doConnect(wt: Worktree, root: string): Promise<void> {
+  const cfg = loadConfig(root);
+  if (cfg.herdr && wt.branch && (await herdrAvailable(root))) {
+    const exists = (await listHerdr(root)).some((h) => h.label === wt.branch);
+    if (!exists) {
+      try {
+        await createHerdr(wt.path, wt.branch, root);
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+  // Add the workspace root LAST (may restart the extension host).
   const folders = vscode.workspace.workspaceFolders ?? [];
-  vscode.workspace.updateWorkspaceFolders(folders.length, 0, {
-    uri: vscode.Uri.file(newPath),
-    name: branch,
-  });
+  if (!folders.some((f) => f.uri.fsPath === wt.path)) {
+    vscode.workspace.updateWorkspaceFolders(folders.length, 0, {
+      uri: vscode.Uri.file(wt.path),
+      name: wt.branch || undefined,
+    });
+  }
+}
+
+// Detach a worktree from VS Code (+ herdr). Does NOT delete it from disk.
+async function doDisconnect(wt: Worktree, root: string): Promise<void> {
+  const cfg = loadConfig(root);
+  if (cfg.herdr && wt.branch && (await herdrAvailable(root))) {
+    try {
+      await closeHerdrByLabel(wt.branch, root);
+    } catch {
+      /* best-effort */
+    }
+  }
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const idx = folders.findIndex((f) => f.uri.fsPath === wt.path);
+  if (idx >= 0) {
+    vscode.workspace.updateWorkspaceFolders(idx, 1);
+  }
+}
+
+async function connectCmd(
+  provider: WorktreeProvider,
+  item?: WorktreeItem,
+): Promise<void> {
+  const root = firstFolder();
+  if (!root) {
+    return;
+  }
+  let wt: Worktree | undefined = item?.wt;
+  if (!wt) {
+    const connected = new Set(
+      (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+    );
+    const candidates = (await listWorktrees(root)).filter(
+      (w) => !w.isMain && !connected.has(w.path),
+    );
+    if (!candidates.length) {
+      vscode.window.showInformationMessage(
+        "wt-helper: all worktrees are already connected.",
+      );
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(
+      candidates.map((w) => ({
+        label: w.branch || w.path,
+        description: w.path,
+        wt: w,
+      })),
+      { placeHolder: "Connect which worktree?" },
+    );
+    wt = pick?.wt;
+  }
+  if (!wt || wt.isMain) {
+    return;
+  }
+  await doConnect(wt, root);
+  provider.refresh();
+  vscode.window.showInformationMessage(
+    `wt-helper: connected ${wt.branch || wt.path}`,
+  );
+}
+
+async function disconnectCmd(
+  provider: WorktreeProvider,
+  item?: WorktreeItem,
+): Promise<void> {
+  const root = firstFolder();
+  if (!root) {
+    return;
+  }
+  let wt: Worktree | undefined = item?.wt;
+  if (!wt) {
+    const connected = new Set(
+      (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+    );
+    const candidates = (await listWorktrees(root)).filter(
+      (w) => !w.isMain && connected.has(w.path),
+    );
+    if (!candidates.length) {
+      vscode.window.showInformationMessage(
+        "wt-helper: no connected worktrees to disconnect.",
+      );
+      return;
+    }
+    const pick = await vscode.window.showQuickPick(
+      candidates.map((w) => ({
+        label: w.branch || w.path,
+        description: w.path,
+        wt: w,
+      })),
+      { placeHolder: "Disconnect which worktree? (keeps it on disk)" },
+    );
+    wt = pick?.wt;
+  }
+  if (!wt || wt.isMain) {
+    return;
+  }
+  await doDisconnect(wt, root);
+  provider.refresh();
+  vscode.window.showInformationMessage(
+    `wt-helper: disconnected ${wt.branch || wt.path} (worktree kept)`,
+  );
 }
 
 async function removeWorktreeCmd(
@@ -179,31 +302,22 @@ async function removeWorktreeCmd(
   }
 
   const cfg = loadConfig(root);
+  const target = wt;
 
-  // 1) drop the workspace-folder root (native, instant, no reload)
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  const idx = folders.findIndex((f) => f.uri.fsPath === wt!.path);
-  if (idx >= 0) {
-    vscode.workspace.updateWorkspaceFolders(idx, 1);
-  }
-
-  // 2) close the matching herdr session
-  if (cfg.herdr && wt.branch && (await herdrAvailable(root))) {
-    try {
-      await closeHerdrByLabel(wt.branch, root);
-    } catch {
-      /* best-effort */
-    }
-  }
-
-  // 3) remove the worktree itself, offering --force on failure
-  channel.clear();
-  try {
-    await removeWorktree(wt, cfg, root, channel);
+  // Delete first; only detach (herdr + workspace root) once the delete succeeds,
+  // so a failed/cancelled removal leaves the worktree connected and untouched.
+  const finish = async (forced: boolean) => {
+    await doDisconnect(target, root);
     provider.refresh();
     vscode.window.showInformationMessage(
-      `wt-helper: removed ${wt.branch || wt.path}`,
+      `wt-helper: ${forced ? "force-removed" : "removed"} ${target.branch || target.path}`,
     );
+  };
+
+  channel.clear();
+  try {
+    await removeWorktree(target, cfg, root, channel);
+    await finish(false);
   } catch (e: any) {
     channel.show();
     const choice = await vscode.window.showErrorMessage(
@@ -212,11 +326,8 @@ async function removeWorktreeCmd(
     );
     if (choice === "Force remove") {
       try {
-        await removeWorktree(wt, cfg, root, channel, true);
-        provider.refresh();
-        vscode.window.showInformationMessage(
-          `wt-helper: force-removed ${wt.branch || wt.path}`,
-        );
+        await removeWorktree(target, cfg, root, channel, true);
+        await finish(true);
       } catch (e2: any) {
         vscode.window.showErrorMessage(`wt-helper: ${e2.message}`);
       }
