@@ -1,0 +1,127 @@
+{
+  "name": "wt-helper",
+  "displayName": "wt-helper — Git Worktrees + herdr",
+  "description": "Sidebar for git worktrees with optional herdr sessions: create / open / remove worktrees, add them as workspace roots, all without the terminal.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "file:///Users/mimusilek/Documents/gits/wt-helper-vscode"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:wtHelperWorktrees"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wtHelper",
+          "title": "Worktrees",
+          "icon": "resources/worktrees.svg"
+        }
+      ]
+    },
+    "views": {
+      "wtHelper": [
+        {
+          "id": "wtHelperWorktrees",
+          "name": "Worktrees"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "wtHelper.new",
+        "title": "New Worktree",
+        "category": "wt-helper",
+        "icon": "$(add)"
+      },
+      {
+        "command": "wtHelper.refresh",
+        "title": "Refresh",
+        "category": "wt-helper",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "wtHelper.remove",
+        "title": "Remove Worktree",
+        "category": "wt-helper",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "wtHelper.open",
+        "title": "Reveal in Explorer",
+        "category": "wt-helper"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "wtHelper.new",
+          "when": "view == wtHelperWorktrees",
+          "group": "navigation@1"
+        },
+        {
+          "command": "wtHelper.refresh",
+          "when": "view == wtHelperWorktrees",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "wtHelper.remove",
+          "when": "view == wtHelperWorktrees && viewItem == worktree",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "wt-helper",
+      "properties": {
+        "wtHelper.createCommand": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Command that takes a branch name as its final argument and creates a worktree (e.g. `pnpm worktree:new`). Empty = built-in `git worktree add`. Overridden by `WT_CREATE_CMD` in a repo's `.wt-helper.conf`."
+        },
+        "wtHelper.removeCommand": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Command that takes a worktree path as its final argument. Empty = built-in `git worktree remove`. Overridden by `WT_REMOVE_CMD` in `.wt-helper.conf`."
+        },
+        "wtHelper.herdr": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Create/close a matching herdr session per worktree. Overridden by `WT_HERDR` in `.wt-helper.conf`."
+        },
+        "wtHelper.baseDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Where built-in `git worktree add` puts new worktrees. Empty = `<git-common-dir>/.worktrees`. Overridden by `WT_BASE_DIR` in `.wt-helper.conf`."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package -o wt-helper.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.32.0",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}
