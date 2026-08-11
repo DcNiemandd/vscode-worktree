@@ -91,9 +91,15 @@ export function activate(context: vscode.ExtensionContext): void {
       "wtHelper.openHerdr",
       (item?: WorktreeItem) => openHerdrCmd(item),
     ),
+    vscode.commands.registerCommand("wtHelper.openHerdrRoot", () =>
+      openHerdrRootCmd(),
+    ),
     vscode.commands.registerCommand("wtHelper.remove", (item?: WorktreeItem) =>
       removeWorktreeCmd(provider, channel, item),
     ),
+    // Keep the tree in sync when worktrees are connected/disconnected (or added
+    // by anything else) — without this the list is stale until a manual refresh.
+    vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh()),
   );
 
   // Nudge the built-in Git extension to register every worktree root as a
@@ -311,33 +317,12 @@ async function disconnectCmd(
   );
 }
 
-// Open (or focus) this worktree's herdr session in a new terminal pane.
-async function openHerdrCmd(item?: WorktreeItem): Promise<void> {
-  const root = firstFolder();
-  if (!root) {
-    return;
-  }
+// Open (or focus) a worktree's herdr session in a new terminal pane.
+async function openHerdrForWorktree(wt: Worktree, root: string): Promise<void> {
   if (!(await herdrAvailable(root))) {
     vscode.window.showErrorMessage(
       "wt-helper: herdr is not installed / not on PATH.",
     );
-    return;
-  }
-
-  let wt: Worktree | undefined = item?.wt;
-  if (!wt) {
-    const all = await listWorktrees(root);
-    const pick = await vscode.window.showQuickPick(
-      all.map((w) => ({
-        label: w.branch || w.path,
-        description: w.path,
-        wt: w,
-      })),
-      { placeHolder: "Open herdr for which worktree?" },
-    );
-    wt = pick?.wt;
-  }
-  if (!wt) {
     return;
   }
 
@@ -364,6 +349,45 @@ async function openHerdrCmd(item?: WorktreeItem): Promise<void> {
   });
   term.show();
   term.sendText("herdr");
+}
+
+// Row / palette entry: target a chosen worktree.
+async function openHerdrCmd(item?: WorktreeItem): Promise<void> {
+  const root = firstFolder();
+  if (!root) {
+    return;
+  }
+  let wt: Worktree | undefined = item?.wt;
+  if (!wt) {
+    const all = await listWorktrees(root);
+    const pick = await vscode.window.showQuickPick(
+      all.map((w) => ({
+        label: w.branch || w.path,
+        description: w.path,
+        wt: w,
+      })),
+      { placeHolder: "Open herdr for which worktree?" },
+    );
+    wt = pick?.wt;
+  }
+  if (!wt) {
+    return;
+  }
+  await openHerdrForWorktree(wt, root);
+}
+
+// Title-bar entry: same action as the root (main) worktree's herdr button.
+async function openHerdrRootCmd(): Promise<void> {
+  const root = firstFolder();
+  if (!root) {
+    return;
+  }
+  const main = (await listWorktrees(root)).find((w) => w.isMain) ?? {
+    path: root,
+    branch: "",
+    isMain: true,
+  };
+  await openHerdrForWorktree(main, root);
 }
 
 async function removeWorktreeCmd(

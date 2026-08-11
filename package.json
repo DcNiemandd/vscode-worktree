@@ -58,6 +58,12 @@
         "icon": "$(terminal)"
       },
       {
+        "command": "wtHelper.openHerdrRoot",
+        "title": "Open herdr Session — root (new pane)",
+        "category": "wt-helper",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "wtHelper.connect",
         "title": "Connect Worktree",
         "category": "wt-helper",
@@ -89,9 +95,14 @@
           "group": "navigation@1"
         },
         {
-          "command": "wtHelper.refresh",
+          "command": "wtHelper.openHerdrRoot",
           "when": "view == wtHelperWorktrees",
           "group": "navigation@2"
+        },
+        {
+          "command": "wtHelper.refresh",
+          "when": "view == wtHelperWorktrees",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [

@@ -1,3 +1,4 @@
+import * as path from "path";
 import * as vscode from "vscode";
 import { herdrAvailable, listHerdr } from "./herdr";
 import { listWorktrees, Worktree } from "./worktrees";
@@ -9,7 +10,9 @@ export class WorktreeItem extends vscode.TreeItem {
     public readonly connected: boolean,
   ) {
     super(
-      wt.isMain ? `★ ${wt.branch || "(main)"}` : wt.branch || wt.path,
+      wt.isMain
+        ? `★ ${wt.branch || "(main)"}`
+        : wt.branch || path.basename(wt.path),
       vscode.TreeItemCollapsibleState.None,
     );
 
@@ -30,7 +33,10 @@ export class WorktreeItem extends vscode.TreeItem {
         new vscode.ThemeColor("disabledForeground"),
       );
     } else {
-      this.description = status && status !== "none" ? status : undefined;
+      // Only surface recognized herdr statuses; a fresh session with no agent
+      // reports values like "unknown"/"none" that we treat as "no status".
+      const known = status === "working" || status === "idle";
+      this.description = known ? status : undefined;
       this.iconPath = new vscode.ThemeIcon(
         status === "working"
           ? "circle-filled"
