@@ -38,6 +38,27 @@ async function registerRepos(): Promise<void> {
   }
 }
 
+// Close a manually-opened worktree repo from Source Control. `git.openRepository`
+// marks a repo as manually opened, so VS Code won't auto-close it when the folder
+// leaves — we must close it explicitly. Guarded via the Git API so we only close
+// when a repo is open at EXACTLY this path (never fall through to the main repo).
+async function closeGitRepo(fsPath: string): Promise<void> {
+  try {
+    const ext = vscode.extensions.getExtension<any>("vscode.git");
+    if (!ext) {
+      return;
+    }
+    const api = (ext.isActive ? ext.exports : await ext.activate()).getAPI(1);
+    const uri = vscode.Uri.file(fsPath);
+    const repo = api.getRepository(uri);
+    if (repo && repo.rootUri.fsPath === fsPath) {
+      await vscode.commands.executeCommand("git.close", uri);
+    }
+  } catch {
+    /* git extension missing or repo not open */
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const channel = vscode.window.createOutputChannel("wt-helper");
   const provider = new WorktreeProvider(firstFolder);
@@ -196,6 +217,9 @@ async function doDisconnect(wt: Worktree, root: string): Promise<void> {
       /* best-effort */
     }
   }
+  // Close the Source Control repo (it was manually opened, so it won't auto-close).
+  await closeGitRepo(wt.path);
+
   const folders = vscode.workspace.workspaceFolders ?? [];
   const idx = folders.findIndex((f) => f.uri.fsPath === wt.path);
   if (idx >= 0) {
