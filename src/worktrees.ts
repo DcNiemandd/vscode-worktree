@@ -105,14 +105,37 @@ export async function removeWorktree(
   channel: vscode.OutputChannel,
   force = false,
 ): Promise<void> {
-  let cmdLine: string;
+  // A configured custom remove command (e.g. the repo's cleanup script) owns the
+  // removal — unless we're force-removing, which always uses the robust git path.
   if (cfg.removeCmd && !force) {
-    cmdLine = `${cfg.removeCmd} ${q(wt.path)}`;
-  } else {
-    cmdLine = `git worktree remove ${force ? "--force " : ""}${q(wt.path)}`;
+    const code = await shStream(`${cfg.removeCmd} ${q(wt.path)}`, cwd, channel);
+    if (code !== 0) {
+      throw new Error(`worktree removal failed (exit ${code})`);
+    }
+    return;
   }
-  const code = await shStream(cmdLine, cwd, channel);
-  if (code !== 0) {
-    throw new Error(`worktree removal failed (exit ${code})`);
+
+  // Guard against an `rm -rf` on anything that isn't a genuine worktree path.
+  if (!wt.path || !path.isAbsolute(wt.path) || wt.path === cwd || wt.isMain) {
+    throw new Error(`refusing to remove unsafe worktree path: ${wt.path}`);
+  }
+
+  // Worktrees here always carry untracked build artifacts (node_modules, .next,
+  // .turbo), so a plain `git worktree remove` refuses with "contains modified or
+  // untracked files", and even `--force` can exit non-zero when a background
+  // process (e.g. the turbo daemon) rewrites a cache file mid-delete — git still
+  // unregisters the worktree but leaves a stub directory behind. So: force-remove,
+  // then unconditionally clear any leftover directory and prune the admin entry.
+  // Success is verified by the worktree leaving `git worktree list`, NOT by git's
+  // exit code (which lies when only the final rmdir failed).
+  await shStream(`git worktree remove --force ${q(wt.path)}`, cwd, channel);
+  await shStream(`rm -rf ${q(wt.path)}`, cwd, channel);
+  await shStream("git worktree prune", cwd, channel);
+
+  const stillRegistered = (await listWorktrees(cwd)).some(
+    (w) => w.path === wt.path,
+  );
+  if (stillRegistered) {
+    throw new Error(`worktree still registered after removal: ${wt.path}`);
   }
 }
