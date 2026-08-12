@@ -34,10 +34,27 @@ export async function createHerdr(
   label: string,
   cwd: string,
 ): Promise<void> {
-  await sh(
+  const { stdout } = await sh(
     `herdr workspace create --cwd ${q(cwdPath)} --label ${q(label)} --focus`,
     cwd,
   );
+
+  // Lay the new session out as a vertical split with Claude on the left: parse
+  // the root pane id, split a fresh pane off to the RIGHT (the root pane stays
+  // on the left), then start Claude in that left pane at its shell prompt. All
+  // best-effort — sh() never rejects, so a missing Claude/herdr just leaves the
+  // workspace (and split) as-is without breaking the caller.
+  let rootPane: string | undefined;
+  try {
+    rootPane = JSON.parse(stdout)?.result?.root_pane?.pane_id;
+  } catch {
+    /* non-JSON output — skip the split/agent step */
+  }
+  if (!rootPane) {
+    return;
+  }
+  await sh(`herdr pane split ${q(rootPane)} --direction right --no-focus`, cwd);
+  await sh(`herdr agent start claude --kind claude --pane ${q(rootPane)}`, cwd);
 }
 
 export async function closeHerdrByLabel(
