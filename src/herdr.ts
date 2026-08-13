@@ -40,12 +40,22 @@ export async function createHerdr(
   );
 
   // Lay the new session out as a vertical split with Claude on the left. Order
-  // matters: start Claude in the clean, full-width root pane FIRST (so herdr can
-  // confirm the shell prompt without a concurrent split disturbing it — starting
-  // after the split races and intermittently no-ops), THEN split a shell pane off
-  // to the right. --ratio is the LEFT pane's share, so 0.7 gives Claude 70%. All
-  // best-effort — sh() never rejects, so a missing Claude/herdr just leaves the
-  // workspace as-is without breaking the caller.
+  // matters:
+  //   1. WAIT for the shell prompt. The pane's login shell runs precmd hooks
+  //      (e.g. nvm/fnm auto-switching on the worktree's .nvmrc) BEFORE drawing
+  //      the prompt; those print output and delay readiness. `agent start` types
+  //      `claude` and needs the pane already at a prompt — firing before the hook
+  //      finishes races it and the keystrokes are swallowed (session comes up
+  //      with a bare prompt, no Claude). Matching the prompt line guarantees the
+  //      hooks are done; the timeout also acts as a settle-delay if the prompt
+  //      regex ever stops matching (prompt customised), so `agent start` still
+  //      lands on a quiet shell.
+  //   2. START Claude in the clean, full-width root pane (before the split, so a
+  //      concurrent pane redraw can't disturb prompt detection).
+  //   3. SPLIT a shell pane off to the right. --ratio is the LEFT pane's share,
+  //      so 0.7 gives Claude 70%.
+  // All best-effort — sh() never rejects, so a missing Claude/herdr just leaves
+  // the workspace as-is without breaking the caller.
   let rootPane: string | undefined;
   try {
     rootPane = JSON.parse(stdout)?.result?.root_pane?.pane_id;
@@ -55,6 +65,11 @@ export async function createHerdr(
   if (!rootPane) {
     return;
   }
+  // Prompt line ends in a shell sigil (`%` for zsh, `$` for bash/sh).
+  await sh(
+    `herdr pane wait-output ${q(rootPane)} --regex ${q("[%$]\\s*$")} --timeout 15000`,
+    cwd,
+  );
   await sh(`herdr agent start claude --kind claude --pane ${q(rootPane)}`, cwd);
   await sh(
     `herdr pane split ${q(rootPane)} --direction right --ratio 0.7 --no-focus`,
