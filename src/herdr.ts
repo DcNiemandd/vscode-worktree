@@ -39,11 +39,13 @@ export async function createHerdr(
     cwd,
   );
 
-  // Lay the new session out as a vertical split with Claude on the left: parse
-  // the root pane id, split a fresh pane off to the RIGHT (the root pane stays
-  // on the left), then start Claude in that left pane at its shell prompt. All
+  // Lay the new session out as a vertical split with Claude on the left. Order
+  // matters: start Claude in the clean, full-width root pane FIRST (so herdr can
+  // confirm the shell prompt without a concurrent split disturbing it — starting
+  // after the split races and intermittently no-ops), THEN split a shell pane off
+  // to the right. --ratio is the LEFT pane's share, so 0.7 gives Claude 70%. All
   // best-effort — sh() never rejects, so a missing Claude/herdr just leaves the
-  // workspace (and split) as-is without breaking the caller.
+  // workspace as-is without breaking the caller.
   let rootPane: string | undefined;
   try {
     rootPane = JSON.parse(stdout)?.result?.root_pane?.pane_id;
@@ -53,8 +55,11 @@ export async function createHerdr(
   if (!rootPane) {
     return;
   }
-  await sh(`herdr pane split ${q(rootPane)} --direction right --no-focus`, cwd);
   await sh(`herdr agent start claude --kind claude --pane ${q(rootPane)}`, cwd);
+  await sh(
+    `herdr pane split ${q(rootPane)} --direction right --ratio 0.7 --no-focus`,
+    cwd,
+  );
 }
 
 export async function closeHerdrByLabel(
