@@ -1,5 +1,19 @@
 import { q, sh } from "./exec";
 
+// herdr agent names must match /^[a-z][a-z0-9_-]{0,31}$/ AND be globally unique.
+// Derive one from the branch so each worktree's agent gets a distinct, readable
+// name (a constant like "claude" collides the moment a second session exists).
+function herdrAgentName(label: string): string {
+  const n = label
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-") // invalid chars → dash
+    .replace(/-+/g, "-") // collapse runs
+    .replace(/^[^a-z]+/, "") // must start with a lowercase letter
+    .slice(0, 32)
+    .replace(/[-_]+$/, ""); // no trailing separator
+  return n || "claude";
+}
+
 export interface HerdrWs {
   id: string;
   label: string;
@@ -51,7 +65,9 @@ export async function createHerdr(
   //      regex ever stops matching (prompt customised), so `agent start` still
   //      lands on a quiet shell.
   //   2. START Claude in the clean, full-width root pane (before the split, so a
-  //      concurrent pane redraw can't disturb prompt detection).
+  //      concurrent pane redraw can't disturb prompt detection). The agent is
+  //      named after the branch (unique per worktree) and launched in auto
+  //      permission mode (`--permission-mode auto`).
   //   3. SPLIT a shell pane off to the right. --ratio is the LEFT pane's share,
   //      so 0.7 gives Claude 70%.
   // All best-effort — sh() never rejects, so a missing Claude/herdr just leaves
@@ -70,7 +86,10 @@ export async function createHerdr(
     `herdr pane wait-output ${q(rootPane)} --regex ${q("[%$]\\s*$")} --timeout 15000`,
     cwd,
   );
-  await sh(`herdr agent start claude --kind claude --pane ${q(rootPane)}`, cwd);
+  await sh(
+    `herdr agent start ${q(herdrAgentName(label))} --kind claude --pane ${q(rootPane)} -- --permission-mode auto`,
+    cwd,
+  );
   await sh(
     `herdr pane split ${q(rootPane)} --direction right --ratio 0.7 --no-focus`,
     cwd,
