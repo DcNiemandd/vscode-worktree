@@ -6,7 +6,7 @@ export interface WtConfig {
   createCmd: string; // takes branch as final arg; "" => built-in git worktree add
   removeCmd: string; // takes path as final arg;   "" => built-in git worktree remove
   herdr: boolean;
-  baseDir: string; // "" => <git-common-dir>/.worktrees
+  baseDir: string; // "" => <repo-root>/.worktrees
 }
 
 // Precedence: .wt-helper.conf (repo root) > VS Code settings > built-in defaults.

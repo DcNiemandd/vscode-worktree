@@ -63,6 +63,14 @@ export async function gitCommonDir(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
+// Primary checkout root — where worktrees should live (`<root>/.worktrees`).
+// `gitCommonDir` returns `<repo>/.git` on a normal clone, so strip the trailing
+// `.git`; on a true bare repo the common dir is already the root.
+export async function primaryRepoRoot(cwd: string): Promise<string> {
+  const common = await gitCommonDir(cwd);
+  return path.basename(common) === ".git" ? path.dirname(common) : common;
+}
+
 // Create (or attach) a worktree for `branch`. Returns the new worktree path.
 export async function createWorktree(
   branch: string,

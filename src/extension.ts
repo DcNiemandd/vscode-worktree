@@ -11,9 +11,9 @@ import {
 import { WorktreeItem, WorktreeProvider } from "./tree";
 import {
   createWorktree,
-  gitCommonDir,
   listBranches,
   listWorktrees,
+  primaryRepoRoot,
   removeWorktree,
   Worktree,
 } from "./worktrees";
@@ -154,7 +154,7 @@ async function newWorktree(
 
   const cfg = loadConfig(root);
   if (!cfg.createCmd && !cfg.baseDir) {
-    cfg.baseDir = path.join(await gitCommonDir(root), ".worktrees");
+    cfg.baseDir = path.join(await primaryRepoRoot(root), ".worktrees");
   }
 
   channel.clear();
