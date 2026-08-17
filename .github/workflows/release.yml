@@ -45,10 +45,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # actions/checkout fetches tags as lightweight refs, which drops the
+          # annotation message. Re-fetch to restore the real annotated tag object.
+          git fetch --force --tags origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+
           # Use the annotated tag's message body as the release notes. If the tag
           # is lightweight (or has an empty message), fall back to auto-generated
-          # notes from the commit history.
-          NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          # notes from the commit history. %(contents) on an annotated tag yields
+          # its message; on a lightweight tag it derefs to the commit message, so
+          # guard against that by reading the tag object's type first.
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" = "tag" ]; then
+            NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          else
+            NOTES=""
+          fi
           if [ -n "${NOTES//[[:space:]]/}" ]; then
             printf '%s\n' "$NOTES" > release-notes.md
             gh release create "$GITHUB_REF_NAME" \
