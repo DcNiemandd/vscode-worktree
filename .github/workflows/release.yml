@@ -1,0 +1,49 @@
+name: Release
+
+# Build the .vsix and attach it to a GitHub Release when a version tag is pushed.
+#   git tag v0.0.1 && git push origin v0.0.1
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write # required to create the release and upload the asset
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile
+        run: pnpm run compile
+
+      - name: Package VSIX
+        id: package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          FILE="vscode-worktree-${VERSION}.vsix"
+          pnpm exec vsce package --no-dependencies -o "$FILE"
+          echo "file=$FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "${{ steps.package.outputs.file }}" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
