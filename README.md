@@ -1,4 +1,4 @@
-# vscode-worktree-herdr
+# vscode-worktree
 
 Manage git worktrees and their [herdr](https://herdr.dev) agent sessions from a
 VS Code sidebar — no terminal needed.
