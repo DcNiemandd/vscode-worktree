@@ -15,6 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # fetch the annotated tag object so its message is available
 
       - uses: pnpm/action-setup@v4
         with:
@@ -43,7 +45,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "${{ steps.package.outputs.file }}" \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes
+          # Use the annotated tag's message body as the release notes. If the tag
+          # is lightweight (or has an empty message), fall back to auto-generated
+          # notes from the commit history.
+          NOTES="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          if [ -n "${NOTES//[[:space:]]/}" ]; then
+            printf '%s\n' "$NOTES" > release-notes.md
+            gh release create "$GITHUB_REF_NAME" \
+              "${{ steps.package.outputs.file }}" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release-notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "${{ steps.package.outputs.file }}" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
