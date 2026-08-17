@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "file:///Users/mimusilek/Documents/gits/wt-helper-vscode"
+    "url": "https://github.com/DcNiemandd/vscode-worktree-herdr.git"
   },
   "engines": {
     "vscode": "^1.85.0"
