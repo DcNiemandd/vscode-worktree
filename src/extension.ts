@@ -8,7 +8,7 @@ import {
   herdrAvailable,
   listHerdr,
 } from "./herdr";
-import { WorktreeItem, WorktreeProvider } from "./tree";
+import { BusyState, WorktreeItem, WorktreeProvider } from "./tree";
 import {
   createWorktree,
   listBranches,
@@ -66,6 +66,8 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     channel,
     vscode.window.registerTreeDataProvider("wtHelperWorktrees", provider),
+    // Colours the optimistic "creating…" row (grey) and its failure state (red).
+    vscode.window.registerFileDecorationProvider(provider),
     vscode.commands.registerCommand("wtHelper.refresh", () =>
       provider.refresh(),
     ),
@@ -158,25 +160,43 @@ async function newWorktree(
   }
 
   channel.clear();
+
+  // Optimistic feedback in the sidebar: a greyed-out "creating…" row plus the
+  // native progress bar in the view header, instead of a far-away toaster.
+  provider.showCreating(branch);
+
+  // Flash the row red for a few seconds, then let it fade out on its own.
+  const failRow = () => {
+    provider.showCreateError(branch);
+    setTimeout(() => provider.clearPlaceholder(branch, "error"), 4000);
+  };
+
   let newPath: string | undefined;
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: `Creating worktree for ${branch}…`,
-    },
-    async () => {
-      try {
-        newPath = await createWorktree(branch, cfg, root, channel);
-      } catch (e: any) {
-        channel.show();
-        vscode.window.showErrorMessage(`wt-helper: ${e.message}`);
-      }
-    },
-  );
+  try {
+    newPath = await vscode.window.withProgress(
+      {
+        location: { viewId: "wtHelperWorktrees" },
+        title: `Creating worktree for ${branch}…`,
+      },
+      () => createWorktree(branch, cfg, root, channel),
+    );
+  } catch (e: any) {
+    channel.show();
+    vscode.window.showErrorMessage(`wt-helper: ${e.message}`);
+    failRow();
+    return;
+  }
   if (!newPath) {
+    channel.show();
+    vscode.window.showErrorMessage(
+      `wt-helper: created ${branch}, but couldn't locate its path.`,
+    );
+    failRow();
     return;
   }
 
+  // Success: refresh so the real worktree appears — getChildren swaps out the
+  // optimistic row in the same pass (see reconciliation in WorktreeProvider).
   provider.refresh();
   vscode.window.showInformationMessage(
     `wt-helper: worktree ready for ${branch}`,
@@ -184,7 +204,35 @@ async function newWorktree(
 
   // Connect it: herdr session + workspace root. (doConnect adds the root last,
   // because the single → multi-root transition can restart the extension host.)
-  await doConnect({ path: newPath, branch, isMain: false }, root);
+  const fresh: Worktree = { path: newPath, branch, isMain: false };
+  await withRowProgress(
+    provider,
+    fresh.path,
+    "connecting",
+    `Connecting ${branch}…`,
+    () => doConnect(fresh, root),
+  );
+}
+
+// Run a connect/disconnect with in-sidebar feedback: a spinner on the affected
+// row plus VS Code's native progress bar in the Worktrees view header. Kept next
+// to the toaster so the user sees progress without hunting for the notification.
+async function withRowProgress<T>(
+  provider: WorktreeProvider,
+  fsPath: string,
+  state: BusyState,
+  title: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  provider.setBusy(fsPath, state);
+  try {
+    return await vscode.window.withProgress(
+      { location: { viewId: "wtHelperWorktrees" }, title },
+      fn,
+    );
+  } finally {
+    provider.clearBusy(fsPath);
+  }
 }
 
 // Attach an existing worktree to VS Code (+ herdr) without creating anything.
@@ -268,10 +316,17 @@ async function connectCmd(
   if (!wt || wt.isMain) {
     return;
   }
-  await doConnect(wt, root);
+  const target = wt;
+  await withRowProgress(
+    provider,
+    target.path,
+    "connecting",
+    `Connecting ${target.branch || target.path}…`,
+    () => doConnect(target, root),
+  );
   provider.refresh();
   vscode.window.showInformationMessage(
-    `wt-helper: connected ${wt.branch || wt.path}`,
+    `wt-helper: connected ${target.branch || target.path}`,
   );
 }
 
@@ -310,10 +365,17 @@ async function disconnectCmd(
   if (!wt || wt.isMain) {
     return;
   }
-  await doDisconnect(wt, root);
+  const target = wt;
+  await withRowProgress(
+    provider,
+    target.path,
+    "disconnecting",
+    `Disconnecting ${target.branch || target.path}…`,
+    () => doDisconnect(target, root),
+  );
   provider.refresh();
   vscode.window.showInformationMessage(
-    `wt-helper: disconnected ${wt.branch || wt.path} (worktree kept)`,
+    `wt-helper: disconnected ${target.branch || target.path} (worktree kept)`,
   );
 }
 
@@ -434,34 +496,43 @@ async function removeWorktreeCmd(
 
   const cfg = loadConfig(root);
   const target = wt;
+  const label = target.branch || target.path;
 
+  // One removal attempt, with the in-sidebar "removing…" spinner + header bar.
   // Delete first; only detach (herdr + workspace root) once the delete succeeds,
   // so a failed/cancelled removal leaves the worktree connected and untouched.
-  const finish = async (forced: boolean) => {
-    await doDisconnect(target, root);
-    provider.refresh();
-    vscode.window.showInformationMessage(
-      `wt-helper: ${forced ? "force-removed" : "removed"} ${target.branch || target.path}`,
-    );
-  };
+  const doRemove = (forced: boolean) =>
+    withRowProgress(provider, target.path, "removing", `Removing ${label}…`, async () => {
+      await removeWorktree(target, cfg, root, channel, forced);
+      await doDisconnect(target, root);
+    });
 
   channel.clear();
+  let forced = false;
   try {
-    await removeWorktree(target, cfg, root, channel);
-    await finish(false);
+    await doRemove(false);
   } catch (e: any) {
+    // Spinner is already cleared here (withRowProgress cleans up on throw), so
+    // the "Force remove" prompt isn't shown alongside a stale busy row.
     channel.show();
     const choice = await vscode.window.showErrorMessage(
       `wt-helper: ${e.message}`,
       "Force remove",
     );
-    if (choice === "Force remove") {
-      try {
-        await removeWorktree(target, cfg, root, channel, true);
-        await finish(true);
-      } catch (e2: any) {
-        vscode.window.showErrorMessage(`wt-helper: ${e2.message}`);
-      }
+    if (choice !== "Force remove") {
+      return;
+    }
+    try {
+      await doRemove(true);
+      forced = true;
+    } catch (e2: any) {
+      vscode.window.showErrorMessage(`wt-helper: ${e2.message}`);
+      return;
     }
   }
+
+  provider.refresh();
+  vscode.window.showInformationMessage(
+    `wt-helper: ${forced ? "force-removed" : "removed"} ${label}`,
+  );
 }
