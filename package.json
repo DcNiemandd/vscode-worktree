@@ -2,7 +2,7 @@
   "name": "wt-helper",
   "displayName": "herdr worktrees",
   "description": "Sidebar for git worktrees with optional herdr sessions: create / open / remove worktrees, add them as workspace roots, all without the terminal.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "local",
   "license": "MIT",
   "repository": {
@@ -18,7 +18,8 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
-    "onView:wtHelperWorktrees"
+    "onView:wtHelperWorktrees",
+    "onStartupFinished"
   ],
   "contributes": {
     "viewsContainers": {

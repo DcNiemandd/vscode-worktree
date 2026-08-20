@@ -1,6 +1,7 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { loadConfig } from "./config";
+import { ConnectedStore } from "./store";
 import { q, sh } from "./exec";
 import {
   closeHerdrByLabel,
@@ -62,6 +63,7 @@ async function closeGitRepo(fsPath: string): Promise<void> {
 export function activate(context: vscode.ExtensionContext): void {
   const channel = vscode.window.createOutputChannel("wt-helper");
   const provider = new WorktreeProvider(firstFolder);
+  const store = new ConnectedStore(context.globalState);
 
   context.subscriptions.push(
     channel,
@@ -80,14 +82,14 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }),
     vscode.commands.registerCommand("wtHelper.new", () =>
-      newWorktree(provider, channel),
+      newWorktree(provider, channel, store),
     ),
     vscode.commands.registerCommand("wtHelper.connect", (item?: WorktreeItem) =>
-      connectCmd(provider, item),
+      connectCmd(provider, store, item),
     ),
     vscode.commands.registerCommand(
       "wtHelper.disconnect",
-      (item?: WorktreeItem) => disconnectCmd(provider, item),
+      (item?: WorktreeItem) => disconnectCmd(provider, store, item),
     ),
     vscode.commands.registerCommand(
       "wtHelper.openHerdr",
@@ -97,12 +99,18 @@ export function activate(context: vscode.ExtensionContext): void {
       openHerdrRootCmd(),
     ),
     vscode.commands.registerCommand("wtHelper.remove", (item?: WorktreeItem) =>
-      removeWorktreeCmd(provider, channel, item),
+      removeWorktreeCmd(provider, channel, store, item),
     ),
     // Keep the tree in sync when worktrees are connected/disconnected (or added
     // by anything else) — without this the list is stale until a manual refresh.
     vscode.workspace.onDidChangeWorkspaceFolders(() => provider.refresh()),
   );
+
+  // Re-add worktree roots that were connected before the last restart. VS Code
+  // doesn't persist them itself (they live in an unsaved untitled workspace), so
+  // we restore from globalState. Runs on startup via the onStartupFinished
+  // activation event.
+  void restoreConnections(store);
 
   // Nudge the built-in Git extension to register every worktree root as a
   // repository, so Source Control reacts without needing an IDE restart.
@@ -142,6 +150,7 @@ function pickBranch(root: string): Promise<string | undefined> {
 async function newWorktree(
   provider: WorktreeProvider,
   channel: vscode.OutputChannel,
+  store: ConnectedStore,
 ): Promise<void> {
   const root = firstFolder();
   if (!root) {
@@ -210,7 +219,7 @@ async function newWorktree(
     fresh.path,
     "connecting",
     `Connecting ${branch}…`,
-    () => doConnect(fresh, root),
+    () => doConnect(fresh, root, store),
   );
 }
 
@@ -235,21 +244,38 @@ async function withRowProgress<T>(
   }
 }
 
-// Attach an existing worktree to VS Code (+ herdr) without creating anything.
-async function doConnect(wt: Worktree, root: string): Promise<void> {
+// Ensure a herdr session exists for a worktree (best-effort, no-op unless the
+// `herdr` option is on and herdr is available). Shared by connect and restore so
+// both keep herdr in sync with the connected workspace roots.
+async function ensureHerdr(wt: Worktree, root: string): Promise<void> {
   const cfg = loadConfig(root);
-  if (cfg.herdr && wt.branch && (await herdrAvailable(root))) {
-    const exists = (await listHerdr(root)).some((h) => h.label === wt.branch);
-    if (!exists) {
-      try {
-        await createHerdr(wt.path, wt.branch, root);
-      } catch {
-        /* best-effort */
-      }
+  if (!(cfg.herdr && wt.branch && (await herdrAvailable(root)))) {
+    return;
+  }
+  const exists = (await listHerdr(root)).some((h) => h.label === wt.branch);
+  if (!exists) {
+    try {
+      await createHerdr(wt.path, wt.branch, root);
+    } catch {
+      /* best-effort */
     }
   }
+}
+
+// Attach an existing worktree to VS Code (+ herdr) without creating anything.
+async function doConnect(
+  wt: Worktree,
+  root: string,
+  store: ConnectedStore,
+): Promise<void> {
+  await ensureHerdr(wt, root);
   // Register with Source Control before the (possibly host-restarting) add.
   await openGitRepo(wt.path);
+
+  // Remember the connection so it can be restored after a restart. Persist
+  // before the add: the add may restart the extension host, and on that restart
+  // restoreConnections must already see this path recorded.
+  await store.add(root, wt.path);
 
   // Add the workspace root LAST (may restart the extension host).
   const folders = vscode.workspace.workspaceFolders ?? [];
@@ -262,7 +288,11 @@ async function doConnect(wt: Worktree, root: string): Promise<void> {
 }
 
 // Detach a worktree from VS Code (+ herdr). Does NOT delete it from disk.
-async function doDisconnect(wt: Worktree, root: string): Promise<void> {
+async function doDisconnect(
+  wt: Worktree,
+  root: string,
+  store: ConnectedStore,
+): Promise<void> {
   const cfg = loadConfig(root);
   if (cfg.herdr && wt.branch && (await herdrAvailable(root))) {
     try {
@@ -274,6 +304,9 @@ async function doDisconnect(wt: Worktree, root: string): Promise<void> {
   // Close the Source Control repo (it was manually opened, so it won't auto-close).
   await closeGitRepo(wt.path);
 
+  // Forget the connection so it isn't restored on the next restart.
+  await store.remove(root, wt.path);
+
   const folders = vscode.workspace.workspaceFolders ?? [];
   const idx = folders.findIndex((f) => f.uri.fsPath === wt.path);
   if (idx >= 0) {
@@ -281,8 +314,64 @@ async function doDisconnect(wt: Worktree, root: string): Promise<void> {
   }
 }
 
+// On startup, re-add worktree roots that were connected before the last restart.
+// The saved set is validated against git's current worktree list, so worktrees
+// removed outside the extension are pruned rather than re-added as broken roots.
+async function restoreConnections(store: ConnectedStore): Promise<void> {
+  const root = firstFolder();
+  if (!root) {
+    return;
+  }
+  const saved = store.get(root);
+  if (!saved.length) {
+    return;
+  }
+
+  const branchByPath = new Map(
+    (await listWorktrees(root))
+      .filter((w) => !w.isMain)
+      .map((w) => [w.path, w.branch]),
+  );
+
+  // Drop entries git no longer knows about (e.g. removed from a terminal).
+  for (const p of saved) {
+    if (!branchByPath.has(p)) {
+      await store.remove(root, p);
+    }
+  }
+
+  const present = new Set(
+    (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+  );
+  const toAdd = saved.filter((p) => branchByPath.has(p) && !present.has(p));
+  if (!toAdd.length) {
+    return;
+  }
+
+  // Re-establish herdr sessions + Source Control before the (possibly
+  // host-restarting) add, mirroring doConnect.
+  for (const p of toAdd) {
+    await ensureHerdr({ path: p, branch: branchByPath.get(p) || "", isMain: false }, root);
+    await openGitRepo(p);
+  }
+
+  // Add all missing roots in ONE splice: fewer host restarts, and it respects
+  // the API's "don't call again before onDidChangeWorkspaceFolders fires" rule.
+  // Label with the branch name to match how doConnect names the root.
+  const start = (vscode.workspace.workspaceFolders ?? []).length;
+  vscode.workspace.updateWorkspaceFolders(
+    start,
+    0,
+    ...toAdd.map((p) => ({
+      uri: vscode.Uri.file(p),
+      name: branchByPath.get(p) || path.basename(p),
+    })),
+  );
+}
+
 async function connectCmd(
   provider: WorktreeProvider,
+  store: ConnectedStore,
   item?: WorktreeItem,
 ): Promise<void> {
   const root = firstFolder();
@@ -322,7 +411,7 @@ async function connectCmd(
     target.path,
     "connecting",
     `Connecting ${target.branch || target.path}…`,
-    () => doConnect(target, root),
+    () => doConnect(target, root, store),
   );
   provider.refresh();
   vscode.window.showInformationMessage(
@@ -332,6 +421,7 @@ async function connectCmd(
 
 async function disconnectCmd(
   provider: WorktreeProvider,
+  store: ConnectedStore,
   item?: WorktreeItem,
 ): Promise<void> {
   const root = firstFolder();
@@ -371,7 +461,7 @@ async function disconnectCmd(
     target.path,
     "disconnecting",
     `Disconnecting ${target.branch || target.path}…`,
-    () => doDisconnect(target, root),
+    () => doDisconnect(target, root, store),
   );
   provider.refresh();
   vscode.window.showInformationMessage(
@@ -455,6 +545,7 @@ async function openHerdrRootCmd(): Promise<void> {
 async function removeWorktreeCmd(
   provider: WorktreeProvider,
   channel: vscode.OutputChannel,
+  store: ConnectedStore,
   item?: WorktreeItem,
 ): Promise<void> {
   const root = firstFolder();
@@ -504,7 +595,7 @@ async function removeWorktreeCmd(
   const doRemove = (forced: boolean) =>
     withRowProgress(provider, target.path, "removing", `Removing ${label}…`, async () => {
       await removeWorktree(target, cfg, root, channel, forced);
-      await doDisconnect(target, root);
+      await doDisconnect(target, root, store);
     });
 
   channel.clear();
